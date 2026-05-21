@@ -9,9 +9,17 @@
     <depends>Git4Idea</depends>
 
     <actions>
+        <group id="GitStats.ToolsMenu" text="Git Commit Statistics" description="Git Commit Statistics">
+            <add-to-group group-id="ToolsMenu" anchor="last" />
+            <action id="GitStats.ViewStats"
+                    class="com.gitstats.GitCommitStatsAction"
+                    text="View by Hash..."
+                    description="Show code change statistics for git commits">
+            </action>
+        </group>
         <group id="GitStats.MainMenu" text="Git Commit Statistics" description="Git Commit Statistics">
             <add-to-group group-id="MainMenu" anchor="last" />
-            <action id="GitStats.ViewStats"
+            <action id="GitStats.ViewStats2"
                     class="com.gitstats.GitCommitStatsAction"
                     text="View by Hash..."
                     description="Show code change statistics for git commits">
