@@ -16,8 +16,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class GitCommitStatsAction extends AnAction {
-    private static final Pattern STAT_LINE_PATTERN = Pattern.compile("^(\\d+)\\s+(\\d+)\\s+(.+)$");
-    private static final Pattern BINARY_FILE_PATTERN = Pattern.compile("^(\\d+)\\s+(\\d+)\\s+(.+)\\s+\\(Bin\\)$");
+    private static final Pattern STAT_LINE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*(\\d+)(.*)$");
+    private static final Pattern BINARY_FILE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*(\\d+)\\s*\\(Bin\\)$");
+    private static final Pattern FILES_CHANGED_PATTERN = Pattern.compile("(\\d+)\\s+files?\\s+changed.*?(\\d+)\\s+insertion.*?(\\d+)\\s+deletion");
 
     public GitCommitStatsAction() {
         super("Git Commit Statistics...", "Show code change statistics for a git commit by hash", null);
@@ -101,14 +102,19 @@ public class GitCommitStatsAction extends AnAction {
     @Nullable
     private CommitStats getCommitStats(@NotNull String commitHash, @NotNull String workDir) {
         try {
+            java.io.File workDirFile = new java.io.File(workDir);
             System.err.println("=== Git Debug Info ===");
-            System.err.println("Work dir: " + workDir);
-            System.err.println("Commit hash: " + commitHash);
+            System.err.println("Work dir exists: " + workDirFile.exists());
+            System.err.println("Work dir is directory: " + workDirFile.isDirectory());
+            System.err.println("Work dir can read: " + workDirFile.canRead());
+            System.err.println("Work dir absolute path: " + workDirFile.getAbsolutePath());
 
-            String[] command = {"git", "show", "--stat", "--format=%H%n%an%n%ad%n%s", "--date=iso", commitHash};
+            String[] command = {"git", "-C", workDir, "show", "--stat=1000000", "--no-color", commitHash};
             ProcessBuilder pb = new ProcessBuilder(command);
-            pb.directory(new java.io.File(workDir));
+            pb.directory(workDirFile);
             pb.redirectErrorStream(true);
+
+            System.err.println("Actual working directory: " + pb.directory().getAbsolutePath());
 
             Process process = pb.start();
             StringBuilder output = new StringBuilder();
@@ -175,30 +181,48 @@ public class GitCommitStatsAction extends AnAction {
                 String line = lines[i].trim();
                 if (line.isEmpty()) continue;
 
+                if (line.contains("files changed")) {
+                    Matcher filesMatcher = FILES_CHANGED_PATTERN.matcher(line);
+                    if (filesMatcher.find()) {
+                        filesChanged = Integer.parseInt(filesMatcher.group(1));
+                        String insertions = filesMatcher.group(2);
+                        String deletions = filesMatcher.group(3);
+                        linesAdded = insertions.equals("-") ? 0 : Integer.parseInt(insertions);
+                        linesDeleted = deletions.equals("-") ? 0 : Integer.parseInt(deletions);
+                    }
+                    continue;
+                }
+
                 Matcher binaryMatcher = BINARY_FILE_PATTERN.matcher(line);
                 if (binaryMatcher.matches()) {
                     filesChanged++;
-                    stats.addFileStats(binaryMatcher.group(3), new CommitStats.FileStats(binaryMatcher.group(3), true));
+                    stats.addFileStats(binaryMatcher.group(1), new CommitStats.FileStats(binaryMatcher.group(1), true));
                     continue;
                 }
 
                 Matcher matcher = STAT_LINE_PATTERN.matcher(line);
                 if (matcher.matches()) {
-                    int added = Integer.parseInt(matcher.group(1));
-                    int deleted = Integer.parseInt(matcher.group(2));
-                    String filePath = matcher.group(3);
+                    String filePath = matcher.group(1).trim();
+                    int changes = Integer.parseInt(matcher.group(2));
+                    String rest = matcher.group(3);
 
-                    if (!filePath.contains("|")) continue;
+                    if (!filePath.contains("|") && filePath.contains(" ")) {
+                        continue;
+                    }
+
+                    int added = 0;
+                    int deleted = 0;
+                    if (rest.contains("+")) added = changes;
+                    if (rest.contains("-")) deleted = changes;
 
                     filesChanged++;
                     linesAdded += added;
                     linesDeleted += deleted;
 
-                    String actualFilePath = filePath.split("\\|")[0].trim();
-                    CommitStats.FileStats fileStats = new CommitStats.FileStats(actualFilePath, false);
+                    CommitStats.FileStats fileStats = new CommitStats.FileStats(filePath, false);
                     fileStats.setLinesAdded(added);
                     fileStats.setLinesDeleted(deleted);
-                    stats.addFileStats(actualFilePath, fileStats);
+                    stats.addFileStats(filePath, fileStats);
                 }
             }
 
