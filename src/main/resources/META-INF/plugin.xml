@@ -1,0 +1,19 @@
+<idea-plugin version="2">
+    <id>com.gitstats</id>
+    <name>GitStats</name>
+    <version>1.0.0</version>
+    <vendor>GitStats</vendor>
+    <description>Show code change statistics for git commits including lines added, removed, and binary file changes.</description>
+    <idea-version since-build="211" until-build="999.*" />
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+
+    <actions>
+        <action id="GitStats.ViewStats"
+                class="com.gitstats.GitCommitStatsAction"
+                text="Git Commit Statistics"
+                description="Show code change statistics for git commits">
+            <add-to-group group-id="ToolsMenu" anchor="last" />
+        </action>
+    </actions>
+</idea-plugin>
