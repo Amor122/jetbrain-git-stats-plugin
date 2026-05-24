@@ -20,6 +20,16 @@ public class GitCommitStatsAction extends AnAction {
     private static final Pattern BINARY_FILE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*(\\d+)\\s*\\(Bin\\)$");
     private static final Pattern FILES_CHANGED_PATTERN = Pattern.compile("(\\d+)\\s+files?\\s+changed.*?(\\d+)\\s+insertion.*?(\\d+)\\s+deletion");
 
+    private static class CommitInfo {
+        final String hash;
+        final VirtualFile root;
+
+        CommitInfo(String hash, VirtualFile root) {
+            this.hash = hash;
+            this.root = root;
+        }
+    }
+
     public GitCommitStatsAction() {
         super("Git Commit Statistics...", "Show code change statistics for a git commit by hash", null);
     }
@@ -32,7 +42,9 @@ public class GitCommitStatsAction extends AnAction {
             return;
         }
 
-        String commitHash = getCommitHashFromEvent(e);
+        CommitInfo commitInfo = getCommitInfoFromEvent(e);
+        String commitHash = commitInfo != null ? commitInfo.hash : null;
+        VirtualFile gitRoot = commitInfo != null ? commitInfo.root : null;
 
         if (commitHash == null || commitHash.trim().isEmpty()) {
             commitHash = Messages.showInputDialog(
@@ -59,13 +71,16 @@ public class GitCommitStatsAction extends AnAction {
             return;
         }
 
-        VirtualFile root = findGitRoot(project);
-        if (root == null) {
+        if (gitRoot == null) {
+            gitRoot = findGitRoot(project);
+        }
+
+        if (gitRoot == null) {
             Messages.showMessageDialog("No Git repository found in project.", "Error", Messages.getErrorIcon());
             return;
         }
 
-        CommitStats stats = getCommitStats(commitHash.trim(), root.getPath());
+        CommitStats stats = getCommitStats(commitHash.trim(), gitRoot.getPath());
         if (stats == null) {
             Messages.showMessageDialog("Failed to get commit statistics.\nMake sure:\n1. The commit hash is valid\n2. Git is installed and in PATH\n3. The project is a Git repository", "Error", Messages.getErrorIcon());
             return;
@@ -227,26 +242,26 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String getCommitHashFromEvent(@NotNull AnActionEvent e) {
-        String hash;
+    private CommitInfo getCommitInfoFromEvent(@NotNull AnActionEvent e) {
+        CommitInfo info;
 
-        hash = tryGetFromCommitSelection(e);
-        if (hash != null) return hash;
+        info = tryGetFromCommitSelection(e);
+        if (info != null) return info;
 
-        hash = tryGetFromVcsLog(e);
-        if (hash != null) return hash;
+        info = tryGetFromVcsLog(e);
+        if (info != null) return info;
 
-        hash = tryGetDataFromKey(e, "com.intellij.vcs.log.VcsLogDataKeys", "SELECTED_COMMITS");
-        if (hash != null) return hash;
+        info = tryGetDataFromKey(e, "com.intellij.vcs.log.VcsLogDataKeys", "SELECTED_COMMITS");
+        if (info != null) return info;
 
-        hash = tryGetFromVcsLogUi(e);
-        if (hash != null) return hash;
+        info = tryGetFromVcsLogUi(e);
+        if (info != null) return info;
 
         return null;
     }
 
     @Nullable
-    private String tryGetFromCommitSelection(@NotNull AnActionEvent e) {
+    private CommitInfo tryGetFromCommitSelection(@NotNull AnActionEvent e) {
         try {
             Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
             java.lang.reflect.Field field = dataKeysClass.getDeclaredField("VCS_LOG_COMMIT_SELECTION");
@@ -256,7 +271,7 @@ public class GitCommitStatsAction extends AnAction {
             if (key instanceof com.intellij.openapi.actionSystem.DataKey) {
                 Object selection = e.getData((com.intellij.openapi.actionSystem.DataKey) key);
                 if (selection != null) {
-                    return extractHashFromSelection(selection);
+                    return extractInfoFromSelection(selection);
                 }
             }
         } catch (Exception ex) {
@@ -265,7 +280,7 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String extractHashFromSelection(@NotNull Object selection) {
+    private CommitInfo extractInfoFromSelection(@NotNull Object selection) {
         String[] unwrapMethods = {"getCommits", "getFirst", "getLeadCommit", "getSelectedCommit"};
 
         for (String methodName : unwrapMethods) {
@@ -273,18 +288,18 @@ public class GitCommitStatsAction extends AnAction {
                 java.lang.reflect.Method method = selection.getClass().getMethod(methodName);
                 Object result = method.invoke(selection);
                 if (result != null) {
-                    String hash = extractHashSafely(result);
-                    if (hash != null) return hash;
+                    CommitInfo info = extractInfoSafely(result);
+                    if (info != null) return info;
                 }
             } catch (Exception ex) {
             }
         }
 
-        return extractHashSafely(selection);
+        return extractInfoSafely(selection);
     }
 
     @Nullable
-    private String tryGetFromVcsLog(@NotNull AnActionEvent e) {
+    private CommitInfo tryGetFromVcsLog(@NotNull AnActionEvent e) {
         try {
             Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
             java.lang.reflect.Field logField = dataKeysClass.getDeclaredField("VCS_LOG");
@@ -297,7 +312,7 @@ public class GitCommitStatsAction extends AnAction {
                     java.lang.reflect.Method getSelectedCommits = vcsLog.getClass().getMethod("getSelectedCommits");
                     Object commits = getSelectedCommits.invoke(vcsLog);
                     if (commits != null) {
-                        return extractHashSafely(commits);
+                        return extractInfoSafely(commits);
                     }
                 }
             }
@@ -307,7 +322,7 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String tryGetDataFromKey(@NotNull AnActionEvent e, @NotNull String className, @NotNull String fieldName) {
+    private CommitInfo tryGetDataFromKey(@NotNull AnActionEvent e, @NotNull String className, @NotNull String fieldName) {
         try {
             Class<?> dataKeysClass = Class.forName(className);
             java.lang.reflect.Field field = dataKeysClass.getDeclaredField(fieldName);
@@ -317,7 +332,7 @@ public class GitCommitStatsAction extends AnAction {
             if (key instanceof com.intellij.openapi.actionSystem.DataKey) {
                 Object data = e.getData((com.intellij.openapi.actionSystem.DataKey) key);
                 if (data != null) {
-                    return extractHashSafely(data);
+                    return extractInfoSafely(data);
                 }
             }
         } catch (ClassNotFoundException ex) {
@@ -328,7 +343,7 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String tryGetFromVcsLogUi(@NotNull AnActionEvent e) {
+    private CommitInfo tryGetFromVcsLogUi(@NotNull AnActionEvent e) {
         try {
             Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
             java.lang.reflect.Field uiField = dataKeysClass.getDeclaredField("VCS_LOG_UI");
@@ -338,7 +353,7 @@ public class GitCommitStatsAction extends AnAction {
             if (uiKey instanceof com.intellij.openapi.actionSystem.DataKey) {
                 Object ui = e.getData((com.intellij.openapi.actionSystem.DataKey) uiKey);
                 if (ui != null) {
-                    return extractHashFromVcsLogUi(ui);
+                    return extractInfoFromVcsLogUi(ui);
                 }
             }
         } catch (Exception ex) {
@@ -347,12 +362,12 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String extractHashFromVcsLogUi(@NotNull Object ui) {
+    private CommitInfo extractInfoFromVcsLogUi(@NotNull Object ui) {
         try {
             java.lang.reflect.Method getSelectedCommitsMethod = ui.getClass().getMethod("getSelectedCommits");
             Object result = getSelectedCommitsMethod.invoke(ui);
             if (result != null) {
-                return extractHashSafely(result);
+                return extractInfoSafely(result);
             }
         } catch (Exception ex) {
         }
@@ -361,7 +376,7 @@ public class GitCommitStatsAction extends AnAction {
             java.lang.reflect.Method getSelectedDetailsMethod = ui.getClass().getMethod("getSelectedDetails");
             Object result = getSelectedDetailsMethod.invoke(ui);
             if (result != null) {
-                return extractHashSafely(result);
+                return extractInfoSafely(result);
             }
         } catch (Exception ex) {
         }
@@ -370,11 +385,11 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private String extractHashSafely(@NotNull Object data) {
+    private CommitInfo extractInfoSafely(@NotNull Object data) {
         if (data instanceof Object[]) {
             Object[] arr = (Object[]) data;
             if (arr.length > 0) {
-                return extractHashFromCommit(arr[0]);
+                return extractInfoFromCommit(arr[0]);
             }
             return null;
         }
@@ -383,17 +398,41 @@ public class GitCommitStatsAction extends AnAction {
             Iterable<?> iterable = (Iterable<?>) data;
             for (Object item : iterable) {
                 if (item != null) {
-                    return extractHashFromCommit(item);
+                    return extractInfoFromCommit(item);
                 }
             }
             return null;
         }
 
-        return extractHashFromCommit(data);
+        return extractInfoFromCommit(data);
     }
 
     @Nullable
-    private String extractHashFromCommit(@NotNull Object commit) {
+    private CommitInfo extractInfoFromCommit(@NotNull Object commit) {
+        VirtualFile root = tryGetRootFromCommit(commit);
+        String hash = tryGetHashFromCommit(commit);
+
+        if (hash != null) {
+            return new CommitInfo(hash, root);
+        }
+        return null;
+    }
+
+    @Nullable
+    private VirtualFile tryGetRootFromCommit(@NotNull Object commit) {
+        try {
+            java.lang.reflect.Method getRoot = commit.getClass().getMethod("getRoot");
+            Object result = getRoot.invoke(commit);
+            if (result instanceof VirtualFile) {
+                return (VirtualFile) result;
+            }
+        } catch (Exception ex) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private String tryGetHashFromCommit(@NotNull Object commit) {
         String[] methods = {"getId", "getHash", "getCommitId"};
 
         for (String methodName : methods) {
