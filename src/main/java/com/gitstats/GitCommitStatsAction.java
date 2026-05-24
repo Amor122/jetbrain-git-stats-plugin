@@ -32,11 +32,7 @@ public class GitCommitStatsAction extends AnAction {
             return;
         }
 
-        String commitHash = null;
-
-        System.err.println("=== Git Stats Debug ===");
-        commitHash = getCommitHashFromEvent(e);
-        System.err.println("Commit hash from event: " + (commitHash == null ? "NULL" : commitHash));
+        String commitHash = getCommitHashFromEvent(e);
 
         if (commitHash == null || commitHash.trim().isEmpty()) {
             commitHash = Messages.showInputDialog(
@@ -232,153 +228,218 @@ public class GitCommitStatsAction extends AnAction {
 
     @Nullable
     private String getCommitHashFromEvent(@NotNull AnActionEvent e) {
-        String hash = tryGetHashFromCommitSelection(e);
-        if (hash != null) {
-            return hash;
-        }
-        return null;
-    }
+        String hash;
 
-    @Nullable
-    private String tryGetHashFromCommitSelection(@NotNull AnActionEvent e) {
-        try {
-            Class<?> vcsLogDataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
-            java.lang.reflect.Field commitSelectionField = vcsLogDataKeysClass.getDeclaredField("VCS_LOG_COMMIT_SELECTION");
-            commitSelectionField.setAccessible(true);
-            Object commitSelectionKey = commitSelectionField.get(null);
+        hash = tryGetFromCommitSelection(e);
+        if (hash != null) return hash;
 
-            if (commitSelectionKey instanceof com.intellij.openapi.actionSystem.DataKey) {
-                Object commitSelection = e.getData((com.intellij.openapi.actionSystem.DataKey) commitSelectionKey);
-                
-                if (commitSelection != null) {
-                    System.err.println("Got CommitSelection: " + commitSelection.getClass().getName());
-                    return extractHashFromCommitSelection(commitSelection);
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("Error accessing VCS_LOG_COMMIT_SELECTION: " + ex.getMessage());
-        }
+        hash = tryGetFromVcsLog(e);
+        if (hash != null) return hash;
+
+        hash = tryGetDataFromKey(e, "com.intellij.vcs.log.VcsLogDataKeys", "SELECTED_COMMITS");
+        if (hash != null) return hash;
+
+        hash = tryGetFromVcsLogUi(e);
+        if (hash != null) return hash;
 
         return null;
     }
 
     @Nullable
-    private String extractHashFromCommitSelection(@NotNull Object commitSelection) {
-        java.util.Set<String> visited = new java.util.HashSet<>();
-        
+    private String tryGetFromCommitSelection(@NotNull AnActionEvent e) {
         try {
-            String[] targetMethods = {"getFirst", "getSingle", "getSelectedCommit", "getCommits", "getCommit", "getLeadCommit"};
-            
-            for (java.lang.reflect.Method method : commitSelection.getClass().getMethods()) {
-                if (method.getParameterCount() == 0) {
-                    String methodName = method.getName();
-                    
-                    for (String target : targetMethods) {
-                        if (methodName.equalsIgnoreCase(target)) {
-                            try {
-                                Object result = method.invoke(commitSelection);
-                                System.err.println("Method " + methodName + "() returned: " + (result == null ? "null" : result.getClass().getName()));
-                                
-                                if (result != null) {
-                                    String hash = extractHashFromObjectSafe(result, 0, visited);
-                                    if (hash != null) return hash;
-                                }
-                            } catch (Exception ex) {
-                                System.err.println("Error invoking " + methodName + ": " + ex.getMessage());
-                            }
-                        }
-                    }
+            Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
+            java.lang.reflect.Field field = dataKeysClass.getDeclaredField("VCS_LOG_COMMIT_SELECTION");
+            field.setAccessible(true);
+            Object key = field.get(null);
+
+            if (key instanceof com.intellij.openapi.actionSystem.DataKey) {
+                Object selection = e.getData((com.intellij.openapi.actionSystem.DataKey) key);
+                if (selection != null) {
+                    return extractHashFromSelection(selection);
                 }
             }
         } catch (Exception ex) {
-            System.err.println("extractHashFromCommitSelection failed: " + ex.getMessage());
         }
-        
-        return extractHashFromObjectSafe(commitSelection, 0, visited);
+        return null;
     }
 
     @Nullable
-    private String extractHashFromObjectSafe(@NotNull Object obj, int depth, @NotNull java.util.Set<String> visited) {
-        if (depth > 3) return null;
-        
-        String className = obj.getClass().getName();
-        if (visited.contains(className)) return null;
-        visited.add(className);
-        
-        try {
-            String[] priorityMethods = {"getId", "getHash", "getCommitId", "asString", "toShortString", "getString"};
-            
-            for (String methodName : priorityMethods) {
-                try {
-                    java.lang.reflect.Method method = obj.getClass().getMethod(methodName);
-                    Object result = method.invoke(obj);
-                    System.err.println("Priority method " + methodName + "() on " + className + " = " + (result == null ? "null" : result.toString()));
-                    
-                    if (result != null) {
-                        String str = result.toString();
-                        if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
-                            return str.substring(0, 40);
-                        }
-                        if (str.length() >= 7 && isHexString(str.substring(0, 7))) {
-                            return str;
-                        }
-                        String hash = extractHashFromObjectSafe(result, depth + 1, visited);
-                        if (hash != null) return hash;
-                    }
-                } catch (NoSuchMethodException ex) {
-                } catch (Exception ex) {
-                    System.err.println("Error calling " + methodName + " on " + className + ": " + ex.getMessage());
+    private String extractHashFromSelection(@NotNull Object selection) {
+        String[] unwrapMethods = {"getCommits", "getFirst", "getLeadCommit", "getSelectedCommit"};
+
+        for (String methodName : unwrapMethods) {
+            try {
+                java.lang.reflect.Method method = selection.getClass().getMethod(methodName);
+                Object result = method.invoke(selection);
+                if (result != null) {
+                    String hash = extractHashSafely(result);
+                    if (hash != null) return hash;
                 }
+            } catch (Exception ex) {
             }
-            
-            for (java.lang.reflect.Method method : obj.getClass().getMethods()) {
-                if (method.getParameterCount() == 0) {
-                    String methodName = method.getName().toLowerCase();
-                    
-                    if (methodName.equals("hashcode") || 
-                        methodName.equals("equals") || 
-                        methodName.equals("tostring") ||
-                        methodName.equals("getclass") ||
-                        methodName.startsWith("wait") ||
-                        methodName.startsWith("notify") ||
-                        methodName.startsWith("is")) {
-                        continue;
-                    }
+        }
 
-                    for (String pm : priorityMethods) {
-                        if (methodName.equalsIgnoreCase(pm)) {
-                            continue;
-                        }
-                    }
+        return extractHashSafely(selection);
+    }
 
-                    try {
-                        Object result = method.invoke(obj);
-                        if (result == null) continue;
+    @Nullable
+    private String tryGetFromVcsLog(@NotNull AnActionEvent e) {
+        try {
+            Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
+            java.lang.reflect.Field logField = dataKeysClass.getDeclaredField("VCS_LOG");
+            logField.setAccessible(true);
+            Object logKey = logField.get(null);
 
-                        String str = result.toString();
-
-                        if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
-                            return str.substring(0, 40);
-                        }
-
-                        if (str.length() >= 7 && isHexString(str.substring(0, 7))) {
-                            return str;
-                        }
-
-                        if (!(result instanceof String) && 
-                            !(result instanceof Number) && 
-                            !(result instanceof Boolean)) {
-                            String hash = extractHashFromObjectSafe(result, depth + 1, visited);
-                            if (hash != null) return hash;
-                        }
-                    } catch (Exception ex) {
+            if (logKey instanceof com.intellij.openapi.actionSystem.DataKey) {
+                Object vcsLog = e.getData((com.intellij.openapi.actionSystem.DataKey) logKey);
+                if (vcsLog != null) {
+                    java.lang.reflect.Method getSelectedCommits = vcsLog.getClass().getMethod("getSelectedCommits");
+                    Object commits = getSelectedCommits.invoke(vcsLog);
+                    if (commits != null) {
+                        return extractHashSafely(commits);
                     }
                 }
             }
         } catch (Exception ex) {
-            System.err.println("extractHashFromObjectSafe failed at depth " + depth + ": " + ex.getMessage());
         }
-        
+        return null;
+    }
+
+    @Nullable
+    private String tryGetDataFromKey(@NotNull AnActionEvent e, @NotNull String className, @NotNull String fieldName) {
+        try {
+            Class<?> dataKeysClass = Class.forName(className);
+            java.lang.reflect.Field field = dataKeysClass.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            Object key = field.get(null);
+
+            if (key instanceof com.intellij.openapi.actionSystem.DataKey) {
+                Object data = e.getData((com.intellij.openapi.actionSystem.DataKey) key);
+                if (data != null) {
+                    return extractHashSafely(data);
+                }
+            }
+        } catch (ClassNotFoundException ex) {
+        } catch (NoSuchFieldException ex) {
+        } catch (Exception ex) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private String tryGetFromVcsLogUi(@NotNull AnActionEvent e) {
+        try {
+            Class<?> dataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
+            java.lang.reflect.Field uiField = dataKeysClass.getDeclaredField("VCS_LOG_UI");
+            uiField.setAccessible(true);
+            Object uiKey = uiField.get(null);
+
+            if (uiKey instanceof com.intellij.openapi.actionSystem.DataKey) {
+                Object ui = e.getData((com.intellij.openapi.actionSystem.DataKey) uiKey);
+                if (ui != null) {
+                    return extractHashFromVcsLogUi(ui);
+                }
+            }
+        } catch (Exception ex) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private String extractHashFromVcsLogUi(@NotNull Object ui) {
+        try {
+            java.lang.reflect.Method getSelectedCommitsMethod = ui.getClass().getMethod("getSelectedCommits");
+            Object result = getSelectedCommitsMethod.invoke(ui);
+            if (result != null) {
+                return extractHashSafely(result);
+            }
+        } catch (Exception ex) {
+        }
+
+        try {
+            java.lang.reflect.Method getSelectedDetailsMethod = ui.getClass().getMethod("getSelectedDetails");
+            Object result = getSelectedDetailsMethod.invoke(ui);
+            if (result != null) {
+                return extractHashSafely(result);
+            }
+        } catch (Exception ex) {
+        }
+
+        return null;
+    }
+
+    @Nullable
+    private String extractHashSafely(@NotNull Object data) {
+        if (data instanceof Object[]) {
+            Object[] arr = (Object[]) data;
+            if (arr.length > 0) {
+                return extractHashFromCommit(arr[0]);
+            }
+            return null;
+        }
+
+        if (data instanceof Iterable) {
+            Iterable<?> iterable = (Iterable<?>) data;
+            for (Object item : iterable) {
+                if (item != null) {
+                    return extractHashFromCommit(item);
+                }
+            }
+            return null;
+        }
+
+        return extractHashFromCommit(data);
+    }
+
+    @Nullable
+    private String extractHashFromCommit(@NotNull Object commit) {
+        String[] methods = {"getId", "getHash", "getCommitId"};
+
+        for (String methodName : methods) {
+            try {
+                java.lang.reflect.Method method = commit.getClass().getMethod(methodName);
+                Object id = method.invoke(commit);
+                if (id != null) {
+                    String hashStr = tryConvertIdToHash(id);
+                    if (hashStr != null) return hashStr;
+                }
+            } catch (Exception ex) {
+            }
+        }
+
+        return null;
+    }
+
+    @Nullable
+    private String tryConvertIdToHash(@NotNull Object id) {
+        String[] strMethods = {"toString", "toShortString", "asString", "getString"};
+
+        for (String methodName : strMethods) {
+            try {
+                java.lang.reflect.Method method = id.getClass().getMethod(methodName);
+                Object result = method.invoke(id);
+                if (result instanceof String) {
+                    String str = (String) result;
+                    if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
+                        return str.substring(0, 40);
+                    }
+                    if (str.length() >= 7 && isHexString(str)) {
+                        return str;
+                    }
+                }
+            } catch (Exception ex) {
+            }
+        }
+
+        String str = id.toString();
+        if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
+            return str.substring(0, 40);
+        }
+        if (str.length() >= 7 && isHexString(str)) {
+            return str;
+        }
+
         return null;
     }
 
