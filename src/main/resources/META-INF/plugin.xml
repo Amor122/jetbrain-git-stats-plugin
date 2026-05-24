@@ -17,13 +17,12 @@
                     description="Show code change statistics for git commits">
             </action>
         </group>
-        <group id="GitStats.MainMenu" text="Git Commit Statistics" description="Git Commit Statistics">
-            <add-to-group group-id="MainMenu" anchor="last" />
-            <action id="GitStats.ViewStats2"
-                    class="com.gitstats.GitCommitStatsAction"
-                    text="View by Hash..."
-                    description="Show code change statistics for git commits">
-            </action>
-        </group>
+
+        <action id="GitStats.ViewStatsFromLog"
+                class="com.gitstats.GitCommitStatsAction"
+                text="View Commit Statistics"
+                description="Show code change statistics for selected commit">
+            <add-to-group group-id="Vcs.Log.ContextMenu" anchor="last" />
+        </action>
     </actions>
 </idea-plugin>

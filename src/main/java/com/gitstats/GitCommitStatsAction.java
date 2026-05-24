@@ -32,24 +32,32 @@ public class GitCommitStatsAction extends AnAction {
             return;
         }
 
-        String commitHash = Messages.showInputDialog(
-            project,
-            "Enter commit hash:",
-            "Git Commit Statistics",
-            Messages.getQuestionIcon(),
-            "",
-            new InputValidator() {
-                @Override
-                public boolean checkInput(String input) {
-                    return input != null && !input.trim().isEmpty() && input.length() >= 4;
-                }
+        String commitHash = null;
 
-                @Override
-                public boolean canClose(String input) {
-                    return checkInput(input);
+        System.err.println("=== Git Stats Debug ===");
+        commitHash = getCommitHashFromEvent(e);
+        System.err.println("Commit hash from event: " + (commitHash == null ? "NULL" : commitHash));
+
+        if (commitHash == null || commitHash.trim().isEmpty()) {
+            commitHash = Messages.showInputDialog(
+                project,
+                "Enter commit hash:",
+                "Git Commit Statistics",
+                Messages.getQuestionIcon(),
+                "",
+                new InputValidator() {
+                    @Override
+                    public boolean checkInput(String input) {
+                        return input != null && !input.trim().isEmpty() && input.length() >= 4;
+                    }
+
+                    @Override
+                    public boolean canClose(String input) {
+                        return checkInput(input);
+                    }
                 }
-            }
-        );
+            );
+        }
 
         if (commitHash == null || commitHash.trim().isEmpty()) {
             return;
@@ -103,18 +111,11 @@ public class GitCommitStatsAction extends AnAction {
     private CommitStats getCommitStats(@NotNull String commitHash, @NotNull String workDir) {
         try {
             java.io.File workDirFile = new java.io.File(workDir);
-            System.err.println("=== Git Debug Info ===");
-            System.err.println("Work dir exists: " + workDirFile.exists());
-            System.err.println("Work dir is directory: " + workDirFile.isDirectory());
-            System.err.println("Work dir can read: " + workDirFile.canRead());
-            System.err.println("Work dir absolute path: " + workDirFile.getAbsolutePath());
 
             String[] command = {"git", "-C", workDir, "show", "--stat=1000000", "--no-color", commitHash};
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.directory(workDirFile);
             pb.redirectErrorStream(true);
-
-            System.err.println("Actual working directory: " + pb.directory().getAbsolutePath());
 
             Process process = pb.start();
             StringBuilder output = new StringBuilder();
@@ -128,13 +129,8 @@ public class GitCommitStatsAction extends AnAction {
             }
 
             int exitCode = process.waitFor();
-            System.err.println("Exit code: " + exitCode);
-            System.err.println("=== Git Output ===");
-            System.err.println(output.toString());
-            System.err.println("=== End Git Output ===");
 
             if (output.length() == 0) {
-                System.err.println("ERROR: Git output is empty!");
                 return null;
             }
 
@@ -232,6 +228,168 @@ public class GitCommitStatsAction extends AnAction {
         }
 
         return stats;
+    }
+
+    @Nullable
+    private String getCommitHashFromEvent(@NotNull AnActionEvent e) {
+        String hash = tryGetHashFromCommitSelection(e);
+        if (hash != null) {
+            return hash;
+        }
+        return null;
+    }
+
+    @Nullable
+    private String tryGetHashFromCommitSelection(@NotNull AnActionEvent e) {
+        try {
+            Class<?> vcsLogDataKeysClass = Class.forName("com.intellij.vcs.log.VcsLogDataKeys");
+            java.lang.reflect.Field commitSelectionField = vcsLogDataKeysClass.getDeclaredField("VCS_LOG_COMMIT_SELECTION");
+            commitSelectionField.setAccessible(true);
+            Object commitSelectionKey = commitSelectionField.get(null);
+
+            if (commitSelectionKey instanceof com.intellij.openapi.actionSystem.DataKey) {
+                Object commitSelection = e.getData((com.intellij.openapi.actionSystem.DataKey) commitSelectionKey);
+                
+                if (commitSelection != null) {
+                    System.err.println("Got CommitSelection: " + commitSelection.getClass().getName());
+                    return extractHashFromCommitSelection(commitSelection);
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("Error accessing VCS_LOG_COMMIT_SELECTION: " + ex.getMessage());
+        }
+
+        return null;
+    }
+
+    @Nullable
+    private String extractHashFromCommitSelection(@NotNull Object commitSelection) {
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        
+        try {
+            String[] targetMethods = {"getFirst", "getSingle", "getSelectedCommit", "getCommits", "getCommit", "getLeadCommit"};
+            
+            for (java.lang.reflect.Method method : commitSelection.getClass().getMethods()) {
+                if (method.getParameterCount() == 0) {
+                    String methodName = method.getName();
+                    
+                    for (String target : targetMethods) {
+                        if (methodName.equalsIgnoreCase(target)) {
+                            try {
+                                Object result = method.invoke(commitSelection);
+                                System.err.println("Method " + methodName + "() returned: " + (result == null ? "null" : result.getClass().getName()));
+                                
+                                if (result != null) {
+                                    String hash = extractHashFromObjectSafe(result, 0, visited);
+                                    if (hash != null) return hash;
+                                }
+                            } catch (Exception ex) {
+                                System.err.println("Error invoking " + methodName + ": " + ex.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("extractHashFromCommitSelection failed: " + ex.getMessage());
+        }
+        
+        return extractHashFromObjectSafe(commitSelection, 0, visited);
+    }
+
+    @Nullable
+    private String extractHashFromObjectSafe(@NotNull Object obj, int depth, @NotNull java.util.Set<String> visited) {
+        if (depth > 3) return null;
+        
+        String className = obj.getClass().getName();
+        if (visited.contains(className)) return null;
+        visited.add(className);
+        
+        try {
+            String[] priorityMethods = {"getId", "getHash", "getCommitId", "asString", "toShortString", "getString"};
+            
+            for (String methodName : priorityMethods) {
+                try {
+                    java.lang.reflect.Method method = obj.getClass().getMethod(methodName);
+                    Object result = method.invoke(obj);
+                    System.err.println("Priority method " + methodName + "() on " + className + " = " + (result == null ? "null" : result.toString()));
+                    
+                    if (result != null) {
+                        String str = result.toString();
+                        if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
+                            return str.substring(0, 40);
+                        }
+                        if (str.length() >= 7 && isHexString(str.substring(0, 7))) {
+                            return str;
+                        }
+                        String hash = extractHashFromObjectSafe(result, depth + 1, visited);
+                        if (hash != null) return hash;
+                    }
+                } catch (NoSuchMethodException ex) {
+                } catch (Exception ex) {
+                    System.err.println("Error calling " + methodName + " on " + className + ": " + ex.getMessage());
+                }
+            }
+            
+            for (java.lang.reflect.Method method : obj.getClass().getMethods()) {
+                if (method.getParameterCount() == 0) {
+                    String methodName = method.getName().toLowerCase();
+                    
+                    if (methodName.equals("hashcode") || 
+                        methodName.equals("equals") || 
+                        methodName.equals("tostring") ||
+                        methodName.equals("getclass") ||
+                        methodName.startsWith("wait") ||
+                        methodName.startsWith("notify") ||
+                        methodName.startsWith("is")) {
+                        continue;
+                    }
+
+                    for (String pm : priorityMethods) {
+                        if (methodName.equalsIgnoreCase(pm)) {
+                            continue;
+                        }
+                    }
+
+                    try {
+                        Object result = method.invoke(obj);
+                        if (result == null) continue;
+
+                        String str = result.toString();
+
+                        if (str.length() >= 40 && isHexString(str.substring(0, 40))) {
+                            return str.substring(0, 40);
+                        }
+
+                        if (str.length() >= 7 && isHexString(str.substring(0, 7))) {
+                            return str;
+                        }
+
+                        if (!(result instanceof String) && 
+                            !(result instanceof Number) && 
+                            !(result instanceof Boolean)) {
+                            String hash = extractHashFromObjectSafe(result, depth + 1, visited);
+                            if (hash != null) return hash;
+                        }
+                    } catch (Exception ex) {
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            System.err.println("extractHashFromObjectSafe failed at depth " + depth + ": " + ex.getMessage());
+        }
+        
+        return null;
+    }
+
+    private boolean isHexString(String str) {
+        if (str == null || str.isEmpty()) return false;
+        for (char c : str.toCharArray()) {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Nullable
