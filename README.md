@@ -49,8 +49,10 @@ build/distributions/GitStats-1.0.0.zip
 1. Open the **Git** tool window (usually at the bottom of the IDE)
 2. Switch to the **Log** tab
 3. Right-click on any commit in the commit list
-4. Select **View Commit Statistics** from the context menu
-5. A dialog will appear showing:
+4. Select **Git Commit Statistics** from the context menu
+<img width="277" height="563" alt="image" src="https://github.com/user-attachments/assets/5d5fc73d-09ce-453a-a481-1223d0cc2a22" />
+
+6. A dialog will appear showing:
    - Commit hash, author, date, and message
    - Total files changed, lines added, lines deleted, and net change
    - Per-file breakdown of additions and deletions
