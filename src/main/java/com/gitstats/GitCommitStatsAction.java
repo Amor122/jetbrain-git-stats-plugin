@@ -17,8 +17,8 @@ import java.util.regex.Pattern;
 
 public class GitCommitStatsAction extends AnAction {
     private static final Pattern STAT_LINE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*(\\d+)(.*)$");
-    private static final Pattern BINARY_FILE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*(\\d+)\\s*\\(Bin\\)$");
-    private static final Pattern FILES_CHANGED_PATTERN = Pattern.compile("(\\d+)\\s+files?\\s+changed.*?(\\d+)\\s+insertion.*?(\\d+)\\s+deletion");
+    private static final Pattern BINARY_FILE_PATTERN = Pattern.compile("^\\s*(.+?)\\s*\\|\\s*Bin.*$");
+    private static final Pattern FILES_CHANGED_PATTERN = Pattern.compile("(\\d+)\\s+files?\\s+changed(?:.*?(\\d+)\\s+insertions?)?(?:.*?(\\d+)\\s+deletions?)?");
 
     private static class CommitInfo {
         final String hash;
@@ -154,15 +154,15 @@ public class GitCommitStatsAction extends AnAction {
     }
 
     @Nullable
-    private CommitStats parseGitOutput(@NotNull String output, @NotNull String commitHash) {
+    CommitStats parseGitOutput(@NotNull String output, @NotNull String commitHash) {
         String[] lines = output.split("\n");
         if (lines.length < 4) {
             return null;
         }
 
-        String hash = lines[0].trim();
-        String author = lines[1].trim();
-        String date = lines[2].trim();
+        String hash = lines[0].trim().replaceFirst("^commit\\s+", "");
+        String author = lines[1].trim().replaceFirst("^Author:\\s+", "");
+        String date = lines[2].trim().replaceFirst("^Date:\\s+", "");
 
         StringBuilder message = new StringBuilder();
         int statStartIndex = -1;
@@ -188,14 +188,14 @@ public class GitCommitStatsAction extends AnAction {
                 String line = lines[i].trim();
                 if (line.isEmpty()) continue;
 
-                if (line.contains("files changed")) {
+                if (line.contains("file") && line.contains("changed")) {
                     Matcher filesMatcher = FILES_CHANGED_PATTERN.matcher(line);
                     if (filesMatcher.find()) {
                         filesChanged = Integer.parseInt(filesMatcher.group(1));
                         String insertions = filesMatcher.group(2);
                         String deletions = filesMatcher.group(3);
-                        linesAdded = insertions.equals("-") ? 0 : Integer.parseInt(insertions);
-                        linesDeleted = deletions.equals("-") ? 0 : Integer.parseInt(deletions);
+                        linesAdded = (insertions == null || insertions.equals("-")) ? 0 : Integer.parseInt(insertions);
+                        linesDeleted = (deletions == null || deletions.equals("-")) ? 0 : Integer.parseInt(deletions);
                     }
                     continue;
                 }
@@ -482,7 +482,7 @@ public class GitCommitStatsAction extends AnAction {
         return null;
     }
 
-    private boolean isHexString(String str) {
+    boolean isHexString(String str) {
         if (str == null || str.isEmpty()) return false;
         for (char c : str.toCharArray()) {
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
